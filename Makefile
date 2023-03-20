@@ -3,10 +3,10 @@ CCFLAGS = -std=c99 -pedantic -Wall -Werror
 OPTIONS = -g
 
 build:
-	gcc ${CCFLAGS} ${OPTIONS} -o cpuSchedule cpuSchedule.c
+	gcc ${CCFLAGS} ${OPTIONS} -o exec cpuSchedule.c
 
 clean:
-	rm -f cpuSchedule
+	rm -f exec
 
 # to run valgrind/check for memory problems run the following:
 # valgrind --track-origins=yes --leak-check=full ./"my-file-name" "args..."
