@@ -33,6 +33,10 @@ struct thread_data{
     DLL *r; //the ready queue for what we store all our processes in for cpu bursts
 };
 
+/**
+ * Represents which algorithm is in use
+*/
+enum algo {FCFS, SJF, PR, RR};
 
 /**
  * Creates a new doubly linked list with null values
@@ -122,12 +126,51 @@ void *  parse_input(void *param){
 }
 
 int main(int argc, char const *argv[]) {
-    //int n = strncmp("FCFS", argv[2], 5);        
+   	
+   	// checking if arguments/options are valid
+   	if (argc < 5) {
+   		printf("Not enough arguments given\n");
+   		exit(0);
+   	}
+
+   	enum algo curAlgo = -1;
+
+   	if (strncmp("-arg", argv[1], 4) == 0) {
+   		if (strncmp("FCFS", argv[2], 4) == 0) {
+   			curAlgo = 0;
+   		}
+   		if (strncmp("SJF", argv[2], 3) == 0) {
+   			curAlgo = 1;
+   		}
+   		if (strncmp("PR", argv[2], 2) == 0) {
+   			curAlgo = 2;
+   		}
+   		if (strncmp("RR", argv[2], 2) == 0) {
+   			if (argc < 7) {
+   				printf("Not enough arguments given\n");
+   				exit(0);
+   			}
+   			curAlgo = 3;
+   		}
+
+   		if (curAlgo == -1) {
+   			printf("Not a valid algorithm\n");
+   			exit(0);
+   		} 
+   	} else {
+   		printf("Could not find the -arg option\n");
+   		exit(0);
+   	}
+
     pthread_t tID;
     void *thread_result;
     FILE* fp;
     DLL* ready = newDLL();
-    fp = fopen(argv[4], "r");
+    if (curAlgo == 3) {
+    	fp = fopen(argv[6], "r");	
+    } else {
+    	fp = fopen(argv[4], "r");
+    }
     if(fp){
         struct thread_data td;
         td.f = fp;
