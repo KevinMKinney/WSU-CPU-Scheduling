@@ -12,7 +12,8 @@
 */
 typedef struct listNode{
     //might need to add more variables for priority and other things
-    char* proc;
+    int* proc;
+    int procSize;
     struct listNode *next;
     struct listNode *prev;
 }node;
@@ -30,13 +31,12 @@ typedef struct doubleLinkedList{
 */
 struct thread_data{
     FILE *f; //the file pointer of the file we are looking at
+    int a; //the scheduling algorithm that is used
     DLL *r; //the ready queue for what we store all our processes in for cpu bursts
 };
 
-/**
- * Represents which algorithm is in use
-*/
-enum algo {FCFS, SJF, PR, RR};
+// needs to be global so threads can comunicate
+struct thread_data td;
 
 /**
  * Creates a new doubly linked list with null values
@@ -59,9 +59,26 @@ DLL * newDLL(){
 void insert_node_back(char *s, DLL *d){
     
     node *n = (node *) malloc(sizeof(node));
-    n->proc = malloc(BUF_SIZE * sizeof(char));
+    //n->proc = malloc(BUF_SIZE * sizeof(char));
 
-    strncpy(n->proc, s, BUF_SIZE);
+    //strncpy(n->proc, s, BUF_SIZE);
+
+
+	int* tokens = malloc(BUF_SIZE * sizeof(int));
+	int i = 0;
+	char const delim = ' ';
+
+	// first token will always be "proc"
+    char* tok = strtok(s, &delim);
+    tok = strtok(NULL, &delim);
+    while (tok != NULL) {
+    	tokens[i] = atoi(tok);
+    	i++;
+    	tok = strtok(NULL, &delim);
+    }
+
+    n->proc = realloc(tokens, i * sizeof(int));
+    n->procSize = i;
 
     if(d->head == NULL){
         n->next = d->tail;
@@ -107,7 +124,7 @@ void *  parse_input(void *param){
             strncpy(TempStr, Str1+6, BUF_SIZE);
             val = atoi(TempStr);
             free(TempStr);
-            sleep(val/1000);
+            sleep(val/1000.0);
             continue;
         }
         if(strncmp("stop", Str1, 4)==0){
@@ -120,9 +137,34 @@ void *  parse_input(void *param){
             insert_node_back(Str1, d);
         }
     }
-     
+
     free(Str1);
     return NULL;        
+}
+
+void* cpuSchedule(void* param) {
+	struct thread_data *myTD = (struct thread_data *) param;
+	DLL *d = myTD->r;
+
+	if (myTD->a == 0) {
+		// Using FCFS
+
+		// something like this for each process:
+
+		float zzz;
+
+		// TODO: handle case where the input parser thread does not add a proc before the code below
+		sleep(0.5);
+
+		for (int i = 0; i < d->head->procSize; i++) {
+			zzz = (d->head->proc)[i] / 1000.0;
+			printf("head proc is sleeping for %f\n", zzz);
+			sleep(zzz);
+		}
+		// then put process on I/O thread
+	}
+
+    return NULL;
 }
 
 int main(int argc, char const *argv[]) {
@@ -133,7 +175,8 @@ int main(int argc, char const *argv[]) {
    		exit(0);
    	}
 
-   	enum algo curAlgo = -1;
+   	// curAlgo corresponds to the index in {FCFS, SJF, PR, RR};
+   	int curAlgo = -1;
 
    	if (strncmp("-arg", argv[1], 4) == 0) {
    		if (strncmp("FCFS", argv[2], 4) == 0) {
@@ -163,6 +206,7 @@ int main(int argc, char const *argv[]) {
    	}
 
     pthread_t tID;
+    pthread_t cpuTID;
     void *thread_result;
     FILE* fp;
     DLL* ready = newDLL();
@@ -172,10 +216,13 @@ int main(int argc, char const *argv[]) {
     	fp = fopen(argv[4], "r");
     }
     if(fp){
-        struct thread_data td;
         td.f = fp;
+        td.a = curAlgo;
         td.r = ready;
         pthread_create(&tID, NULL, parse_input, &td);
+
+        // for CPU thread
+        pthread_create(&cpuTID, NULL, cpuSchedule, &td);
     }
     else{//In case we can't open a file
         printf("Cannot open input file\n");
@@ -183,6 +230,16 @@ int main(int argc, char const *argv[]) {
     }
     
     pthread_join(tID, &thread_result);
+    if (thread_result != 0) {
+    	printf("Input parser thread returned an error\n");
+    	exit(1);
+    }
+    pthread_join(cpuTID, &thread_result);
+    if (thread_result != 0) {
+    	printf("CPU thread returned an error\n");
+    	exit(1);
+    }
+
     if(fclose(fp) != 0){
         printf("Cannot close file\n");
         exit(1);
