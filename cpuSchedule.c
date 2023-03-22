@@ -35,6 +35,7 @@ struct thread_data{
 
 // needs to be global so threads can comunicate
 struct thread_data td;
+int stop = 0;
 
 /**
  * Creates a new doubly linked list with null values
@@ -142,18 +143,19 @@ void *  parse_input(void *param){
 void* cpuScheduleFCFS(void* param) {
 	struct thread_data *myTD = (struct thread_data *) param;
 	DLL *d = myTD->r;
-	node *cur = d->head;
+	int i = 0;
 	float zzz;
+	node *temp = NULL;
 
-	// something like this for each process:
+	while (stop != 1) {
+		while (d->head == NULL) {
+			// waiting for process in the ready queue
+		}
 
-	// TODO: handle case where the input parser thread does not add a proc before the code below
-
-	while (cur != NULL) {
 		printf("New Proc\n");
-		int i = 0;
-		while (cur->proc[i] != -1) {
-			zzz = (cur->proc)[i] / 1000.0;
+		i = 0;
+		while (d->head->proc[i] != -1) {
+			zzz = (d->head->proc)[i] / 1000.0;
 			i++;
 			printf("proc is sleeping for %f\n", zzz);
 			sleep(zzz);
@@ -161,7 +163,9 @@ void* cpuScheduleFCFS(void* param) {
 
 		// then put process on I/O thread
 
-		cur = cur->next;
+		temp = d->head->next;
+		free(d->head);
+		d->head = temp;
 	}
 
 	printf("end\n");
@@ -236,6 +240,8 @@ int main(int argc, char const *argv[]) {
     	printf("Input parser thread returned an error\n");
     	exit(1);
     }
+    stop = 1;
+    
     pthread_join(cpuTID, &thread_result);
     if (thread_result != 0) {
     	printf("CPU thread returned an error\n");
