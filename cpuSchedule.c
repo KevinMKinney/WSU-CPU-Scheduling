@@ -13,7 +13,6 @@
 typedef struct listNode{
     //might need to add more variables for priority and other things
     int* proc;
-    int procSize;
     struct listNode *next;
     struct listNode *prev;
 }node;
@@ -31,7 +30,6 @@ typedef struct doubleLinkedList{
 */
 struct thread_data{
     FILE *f; //the file pointer of the file we are looking at
-    int a; //the scheduling algorithm that is used
     DLL *r; //the ready queue for what we store all our processes in for cpu bursts
 };
 
@@ -59,16 +57,12 @@ DLL * newDLL(){
 void insert_node_back(char *s, DLL *d){
     
     node *n = (node *) malloc(sizeof(node));
-    //n->proc = malloc(BUF_SIZE * sizeof(char));
-
-    //strncpy(n->proc, s, BUF_SIZE);
-
 
 	int* tokens = malloc(BUF_SIZE * sizeof(int));
 	int i = 0;
 	char const delim = ' ';
 
-	// first token will always be "proc"
+	// first token will always be "proc", so we can ignore it
     char* tok = strtok(s, &delim);
     tok = strtok(NULL, &delim);
     while (tok != NULL) {
@@ -77,8 +71,8 @@ void insert_node_back(char *s, DLL *d){
     	tok = strtok(NULL, &delim);
     }
 
-    n->proc = realloc(tokens, i * sizeof(int));
-    n->procSize = i;
+    tokens[i] = -1;
+    n->proc = realloc(tokens, (i + 1) * sizeof(int));
 
     if(d->head == NULL){
         n->next = d->tail;
@@ -142,28 +136,35 @@ void *  parse_input(void *param){
     return NULL;        
 }
 
-void* cpuSchedule(void* param) {
+
+// *** CPU Scheduling Thread Stuff *** //
+
+void* cpuScheduleFCFS(void* param) {
 	struct thread_data *myTD = (struct thread_data *) param;
 	DLL *d = myTD->r;
+	node *cur = d->head;
+	float zzz;
 
-	if (myTD->a == 0) {
-		// Using FCFS
+	// something like this for each process:
 
-		// something like this for each process:
+	// TODO: handle case where the input parser thread does not add a proc before the code below
 
-		float zzz;
-
-		// TODO: handle case where the input parser thread does not add a proc before the code below
-		sleep(0.5);
-
-		for (int i = 0; i < d->head->procSize; i++) {
-			zzz = (d->head->proc)[i] / 1000.0;
-			printf("head proc is sleeping for %f\n", zzz);
+	while (cur != NULL) {
+		printf("New Proc\n");
+		int i = 0;
+		while (cur->proc[i] != -1) {
+			zzz = (cur->proc)[i] / 1000.0;
+			i++;
+			printf("proc is sleeping for %f\n", zzz);
 			sleep(zzz);
 		}
+
 		// then put process on I/O thread
+
+		cur = cur->next;
 	}
 
+	printf("end\n");
     return NULL;
 }
 
@@ -217,12 +218,13 @@ int main(int argc, char const *argv[]) {
     }
     if(fp){
         td.f = fp;
-        td.a = curAlgo;
         td.r = ready;
         pthread_create(&tID, NULL, parse_input, &td);
 
         // for CPU thread
-        pthread_create(&cpuTID, NULL, cpuSchedule, &td);
+        if (curAlgo == 0) {
+        	pthread_create(&cpuTID, NULL, cpuScheduleFCFS, &td);
+    	}
     }
     else{//In case we can't open a file
         printf("Cannot open input file\n");
