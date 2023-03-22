@@ -1,5 +1,5 @@
 .SUFFIXES: .c .o
-CCFLAGS = -std=c99 -pedantic -Wall -Werror
+CCFLAGS = -std=c99 -pedantic -Wall -Werror -pthread
 OPTIONS = -g
 
 build:

@@ -12,7 +12,7 @@
 */
 typedef struct listNode{
     //might need to add more variables for priority and other things
-    char* proc;
+    int* proc;
     struct listNode *next;
     struct listNode *prev;
 }node;
@@ -33,6 +33,9 @@ struct thread_data{
     DLL *r; //the ready queue for what we store all our processes in for cpu bursts
 };
 
+// needs to be global so threads can comunicate
+struct thread_data td;
+int stop = 0;
 
 /**
  * Creates a new doubly linked list with null values
@@ -55,9 +58,22 @@ DLL * newDLL(){
 void insert_node_back(char *s, DLL *d){
     
     node *n = (node *) malloc(sizeof(node));
-    n->proc = malloc(BUF_SIZE * sizeof(char));
 
-    strncpy(n->proc, s, BUF_SIZE);
+	int* tokens = malloc(BUF_SIZE * sizeof(int));
+	int i = 0;
+	char const delim = ' ';
+
+	// first token will always be "proc", so we can ignore it
+    char* tok = strtok(s, &delim);
+    tok = strtok(NULL, &delim);
+    while (tok != NULL) {
+    	tokens[i] = atoi(tok);
+    	i++;
+    	tok = strtok(NULL, &delim);
+    }
+
+    tokens[i] = -1;
+    n->proc = realloc(tokens, (i + 1) * sizeof(int));
 
     if(d->head == NULL){
         n->next = d->tail;
@@ -103,7 +119,7 @@ void *  parse_input(void *param){
             strncpy(TempStr, Str1+6, BUF_SIZE);
             val = atoi(TempStr);
             free(TempStr);
-            sleep(val/1000);
+            sleep(val/1000.0);
             continue;
         }
         if(strncmp("stop", Str1, 4)==0){
@@ -116,23 +132,103 @@ void *  parse_input(void *param){
             insert_node_back(Str1, d);
         }
     }
-     
+
     free(Str1);
     return NULL;        
 }
 
+
+// *** CPU Scheduling Thread Stuff *** //
+
+void* cpuScheduleFCFS(void* param) {
+	struct thread_data *myTD = (struct thread_data *) param;
+	DLL *d = myTD->r;
+	int i = 0;
+	float zzz;
+	node *temp = NULL;
+
+	while (stop != 1) {
+		while (d->head == NULL) {
+			// waiting for process in the ready queue
+		}
+
+		printf("New Proc\n");
+		i = 0;
+		while (d->head->proc[i] != -1) {
+			zzz = (d->head->proc)[i] / 1000.0;
+			i++;
+			printf("proc is sleeping for %f\n", zzz);
+			sleep(zzz);
+		}
+
+		// then put process on I/O thread
+
+		temp = d->head->next;
+		free(d->head);
+		d->head = temp;
+	}
+
+	printf("end\n");
+    return NULL;
+}
+
 int main(int argc, char const *argv[]) {
-    //int n = strncmp("FCFS", argv[2], 5);        
+   	
+   	// checking if arguments/options are valid
+   	if (argc < 5) {
+   		printf("Not enough arguments given\n");
+   		exit(0);
+   	}
+
+   	// curAlgo corresponds to the index in {FCFS, SJF, PR, RR};
+   	int curAlgo = -1;
+
+   	if (strncmp("-arg", argv[1], 4) == 0) {
+   		if (strncmp("FCFS", argv[2], 4) == 0) {
+   			curAlgo = 0;
+   		}
+   		if (strncmp("SJF", argv[2], 3) == 0) {
+   			curAlgo = 1;
+   		}
+   		if (strncmp("PR", argv[2], 2) == 0) {
+   			curAlgo = 2;
+   		}
+   		if (strncmp("RR", argv[2], 2) == 0) {
+   			if (argc < 7) {
+   				printf("Not enough arguments given\n");
+   				exit(0);
+   			}
+   			curAlgo = 3;
+   		}
+
+   		if (curAlgo == -1) {
+   			printf("Not a valid algorithm\n");
+   			exit(0);
+   		} 
+   	} else {
+   		printf("Could not find the -arg option\n");
+   		exit(0);
+   	}
+
     pthread_t tID;
+    pthread_t cpuTID;
     void *thread_result;
     FILE* fp;
     DLL* ready = newDLL();
-    fp = fopen(argv[4], "r");
+    if (curAlgo == 3) {
+    	fp = fopen(argv[6], "r");	
+    } else {
+    	fp = fopen(argv[4], "r");
+    }
     if(fp){
-        struct thread_data td;
         td.f = fp;
         td.r = ready;
         pthread_create(&tID, NULL, parse_input, &td);
+
+        // for CPU thread
+        if (curAlgo == 0) {
+        	pthread_create(&cpuTID, NULL, cpuScheduleFCFS, &td);
+    	}
     }
     else{//In case we can't open a file
         printf("Cannot open input file\n");
@@ -140,6 +236,18 @@ int main(int argc, char const *argv[]) {
     }
     
     pthread_join(tID, &thread_result);
+    if (thread_result != 0) {
+    	printf("Input parser thread returned an error\n");
+    	exit(1);
+    }
+    stop = 1;
+    
+    pthread_join(cpuTID, &thread_result);
+    if (thread_result != 0) {
+    	printf("CPU thread returned an error\n");
+    	exit(1);
+    }
+
     if(fclose(fp) != 0){
         printf("Cannot close file\n");
         exit(1);
