@@ -73,7 +73,7 @@ void insert_node_back(int *tokens,int i, int size, int priority, DLL *d){
     n->index = i;
     if(d->head == NULL){
         n->next = NULL;
-        n->prev = d->head;
+        n->prev = NULL;
         d->head = n;
         d->tail = n;
     }else{
@@ -172,6 +172,7 @@ void * ioSchedule(void* param){
             //If out of jobs, meaning the cpu queue has stopped, then finish with thread
             if(cpuStop == 1){ return NULL; }
 	}
+        sem_wait(&sem_name);
         //If anything in I/O queue, select fifo method, so get the head
         int index = io->head->index;
         //Sleep for the given I/O burst time
@@ -180,19 +181,62 @@ void * ioSchedule(void* param){
 	sleep(zzz);
         
         //Have to wait until ready queue is open to add more to it
-        sem_wait(&sem_name);
         //Put the process back on the ready queue
         insert_node_back(io->head->proc,++index, io->head->size, io->head->prior, d);
-        sem_post(&sem_name);
         //Get the next I/O burst time
 	temp = io->head->next;
 	free(io->head);
 	io->head = temp;
+        
+        sem_post(&sem_name);
     }
     return NULL;
 }
 
 // *** CPU Scheduling Thread Stuff *** //
+
+//Scheduler for non prememptive first come first serve
+//Returns the next process node for the cpu to do, and removes it from queue 
+node * scheduleFCFS(DLL *d){
+    node *n = d->head;
+    d->head = n->next;
+    n->prev = NULL;
+    return n;
+}
+
+
+//Scheduler for non prememptive shortest job first
+//Returns the next process node for the cpu to do, and removes it from queue 
+node * scheduleSJF(DLL *d){
+    node *n = d->head;
+    //if only one item in it
+    node *a = n->next;
+    //int min = n->proc[n->index];
+    while(a != NULL){
+        //printf("n: %d, a: %d\n", n->proc[n->index], a->proc[a->index]);
+        if(a->proc[a->index] < n->proc[n->index]){
+            n = a;
+        }
+        a = a->next;
+    }
+    if(n == d->head){
+        d->head = n->next;
+        n->prev = NULL;
+        return n;
+    }
+    else if(n== d->tail){
+        d->tail = n->prev;
+        n->prev->next = NULL;
+        return n;
+    }
+ //   if(n->next != NULL){
+    n->next->prev = n->prev;    
+   // }
+   // if(n->prev != NULL){
+    n->prev->next = n->next;
+   // }
+    return n;
+}
 
 void* cpuScheduleFCFS(void* param) {
     struct thread_data *myTD = (struct thread_data *) param;
@@ -206,27 +250,28 @@ void* cpuScheduleFCFS(void* param) {
 	    // waiting for process in the ready queue
             //always guaranteed to end with cpu burst
 	}
-        sem_wait(&sem_name);
         //semaphor used to synchronize ready queue
 
         //Get the first process in the ready queue
         //Then the designated amount of cpu burst time
-        int index = d->head->index;                  
-	zzz = d->head->proc[index] / 1000.0;
+        sem_wait(&sem_name);
+        temp = scheduleSJF(d);
+        int index = temp->index;                  
+	zzz = temp->proc[index] / 1000.0;
 	printf("cpu proc is sleeping for %f\n", zzz);
         //Then sleep for the appropiate amount in milliseconds
 	sleep(zzz);
         
         //Once done, either move the process to the i/o queue or terminate process if it's the last burst
-	if ( index < d->head->size-1 ) {
-            insert_node_back(d->head->proc, ++index, d->head->size, d->head->prior, io);
+	if ( index < temp->size-1 ) {
+            insert_node_back(temp->proc, ++index, temp->size, temp->prior, io);
 	}else{    
-            free(d->head->proc);
+            free(temp->proc);
         }
+	//free item from queue, since it's no longer needed
+	free(temp);
+	
         //Schedule another process for ready queue
-	temp = d->head->next;
-	free(d->head);
-	d->head = temp;
         sem_post(&sem_name);
     }
 
