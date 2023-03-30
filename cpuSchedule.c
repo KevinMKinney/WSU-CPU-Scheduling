@@ -20,9 +20,9 @@ typedef struct listNode{
     int prior;
     int size;
     int index;
-    suseconds_t arrivalTime;
-    suseconds_t waitTime;
-    suseconds_t execTime;
+    double arrivalTime;
+   	double waitTime;
+    double execTime;
     struct listNode *next;
     struct listNode *prev;
 }node;
@@ -103,7 +103,7 @@ void insertNewNode(int *tokens,int i, int size, int priority, DLL *d){
 
     struct timeval t;
     gettimeofday(&t, 0);
-    n->arrivalTime = t.tv_usec;
+    n->arrivalTime = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
     n->waitTime = 0;
     n->execTime = 0;
 
@@ -133,8 +133,6 @@ void newInsertNewNode(int *tokens,int i, int size, int priority, suseconds_t arT
     n->size = size;
     n->index = i;
 
-    struct timeval t;
-    gettimeofday(&t, 0);
     n->arrivalTime = arTime;
     n->waitTime = wTime;
     n->execTime = eTime;
@@ -218,7 +216,9 @@ void *  parse_input(void *param){
 suseconds_t updateTime(node* n) {
 	struct timeval t;
 	gettimeofday(&t, 0);
-    return (t.tv_usec - (n->arrivalTime + n->waitTime + n->execTime));
+	double curMili = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
+	//printf("Timessss: %f | %f | %f | %f\n", curMili, n->arrivalTime, n->waitTime, n->execTime);
+    return (curMili - (n->arrivalTime + n->waitTime + n->execTime));
 }
 
 void * ioSchedule(void* param){
@@ -228,6 +228,8 @@ void * ioSchedule(void* param){
     DLL *io = myTD->ioq;
     float zzz;
     node *temp = NULL;
+    double startTime = 0;
+    double endTime = 0;
  
     while (stop != 1 || d->head != NULL || io->head != NULL) {
 	while (io->head == NULL) {
@@ -241,6 +243,8 @@ void * ioSchedule(void* param){
         temp = io->head;
 	io->head = temp->next;
         pthread_mutex_unlock(&io_lock);
+
+        startTime = updateTime(temp);
         
         //If anything in I/O queue, select fifo method, so get the head
         int index = temp->index;
@@ -252,6 +256,9 @@ void * ioSchedule(void* param){
 	}
 	sleep(zzz);
       
+		endTime = updateTime(temp);
+		temp->waitTime -= (endTime - startTime);
+
         //Have to wait until ready queue is open to add more to it
         //Put the process back on the ready queue
         pthread_mutex_lock(&ready_lock);
@@ -366,6 +373,7 @@ void* cpuSchedule(void* param) {
 	sleep(zzz);
         
 		temp->execTime += updateTime(temp);
+		//temp->execTime += zzz;
 
         //Once done, either move the process to the i/o queue or terminate process if it's the last burst
 	if ( index < temp->size-1 ) {
@@ -434,7 +442,8 @@ void* cpuScheduleRR(void* param) {
 		//Then sleep for the appropiate amount in milliseconds
 		sleep(zzz);
 
-		temp->execTime += updateTime(temp);
+		//temp->execTime += updateTime(temp);
+		temp->execTime += procRunTime;
 
 		//printf("TIME: %ld | %ld\n", temp->waitTime, temp->execTime);
 
@@ -515,7 +524,7 @@ int main(int argc, char const *argv[]) {
     DLL* ioQueue = newDLL();
     DLL* completedProc = newDLL();
     struct timeval t;
-    long int startTime = 0;
+    double startTime = 0;
     
     if (curAlgo == 3) {
     	fp = fopen(argv[6], "r");	
@@ -524,7 +533,7 @@ int main(int argc, char const *argv[]) {
     }
 
     gettimeofday(&t, 0);
-    startTime = t.tv_usec;
+    startTime = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
 
     if(fp){
         td.f = fp;
@@ -589,6 +598,8 @@ int main(int argc, char const *argv[]) {
 
     // calculating times
 
+    gettimeofday(&t, 0);
+    double endTime = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);;
     node* temp = completedProc->head;
     float procAmount = 0;
     long int wtSum = 0;
@@ -599,7 +610,7 @@ int main(int argc, char const *argv[]) {
     	wtSum += temp->waitTime;
     	ttSum += temp->waitTime + temp->execTime;
     	if (DEBUG == 1) {
-    		printf("process #%d times: wait - %ld | exec - %ld\n", (int) procAmount, temp->waitTime, temp->execTime);
+    		printf("process #%d times: wait - %f | exec - %f\n", (int) procAmount, temp->waitTime, temp->execTime);
     	}
     	temp = temp->next;
     }
@@ -612,7 +623,7 @@ int main(int argc, char const *argv[]) {
         printf("CPU Scheduling Alg              : %s\n", argv[2]);
     }
     
-    printf("Throughput                      : %f\n", procAmount/(startTime - gettimeofday(&t, 0)));
+    printf("Throughput                      : %f\n", procAmount/((endTime - startTime)));
     printf("Avg. Turnaround Time            : %f\n", ttSum/procAmount);
     printf("Avg. Waiting Time in Ready Queue: %f\n", wtSum/procAmount);
 
