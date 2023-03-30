@@ -45,6 +45,8 @@ struct thread_data{
 struct thread_data td;
 int stop = 0;
 int cpuStop = 0;
+int quantum = 0;
+
 /**
  * Creates a new doubly linked list with null values
 */
@@ -315,6 +317,65 @@ void* cpuScheduleFCFS(void* param) {
     return NULL;
 }
 
+int min(int a, int b) {
+	if (a > b) {
+		return b;
+	}
+	return a;
+}
+
+// scheduler for round robin
+void* cpuScheduleRR(void* param) {
+	struct thread_data *myTD = (struct thread_data *) param;
+    DLL *d = myTD->r;
+    DLL *io = myTD->ioq;
+    float zzz;
+    node *temp = NULL;
+    int procRunTime = 0;
+    int index = 0;
+    
+    // Dequeue proc from head of ready queue
+    // Run job for at most one quantum
+    	// If it hasn't completed, preempt and add to tail of ready queue
+		// If it is finished or blocked, pick another proc immediantly
+	// Repeat
+
+	while (stop != 1 || d->head != NULL || io->head != NULL) {
+		while (d->head == NULL) {}
+
+		pthread_mutex_lock(&ready_lock);
+        temp = scheduleFCFS(d); // FCFS & RR get procs the same way (top of DLL)
+        pthread_mutex_unlock(&ready_lock);
+
+        index = temp->index;
+        procRunTime = min(temp->proc[index], quantum);
+        temp->proc[index] -= procRunTime;
+		
+		zzz = procRunTime / 1000.0;
+		printf("cpu proc is sleeping for %f\n", zzz);
+		//Then sleep for the appropiate amount in milliseconds
+		sleep(zzz);
+
+		if (temp->proc[index] == 0) {
+			if (index < temp->size-1) {
+				pthread_mutex_lock(&io_lock);
+				insert_node_back(temp->proc, ++index, temp->size, temp->prior, io);
+				pthread_mutex_unlock(&io_lock);
+			} else {
+				// proc is done
+				free(temp->proc);
+			}
+		} else {
+			pthread_mutex_lock(&ready_lock);
+			insert_node_back(temp->proc, index, temp->size, temp->prior, d);
+			pthread_mutex_unlock(&ready_lock);
+		}
+	}
+
+	free(temp);
+	return NULL;
+}
+
 int main(int argc, char const *argv[]) {
    	
    	// checking if arguments/options are valid
@@ -325,7 +386,6 @@ int main(int argc, char const *argv[]) {
 
     // curAlgo corresponds to the index in {FCFS, SJF, PR, RR};
     int curAlgo = -1;
-    int quantum = -1;
     if (strncmp("-alg", argv[1], 4) == 0) {
     	if (strncmp("FCFS", argv[2], 4) == 0) {
     	    curAlgo = 0;
@@ -338,10 +398,10 @@ int main(int argc, char const *argv[]) {
    	}
    	if (strncmp("RR", argv[2], 2) == 0) {
    	    if (argc < 7) {
-   		printf("Not enough arguments given\n");
-   		exit(0);
+	   		printf("Not enough arguments given\n");
+	   		exit(0);
    	    }
-            quantum = atoi(argv[4]);
+        quantum = atoi(argv[4]);
    	    curAlgo = 3;
    	}
 
@@ -377,6 +437,7 @@ int main(int argc, char const *argv[]) {
         td.r = ready;
         td.ioq = ioQueue;
         td.alg = curAlgo;
+
         error = pthread_create(&tID, NULL, parse_input, &td);
         if(error != 0){
             printf("Input Parser thread could not be created\n");
@@ -384,7 +445,11 @@ int main(int argc, char const *argv[]) {
         }
 
         // for CPU thread
-        error = pthread_create(&cpuTID, NULL, cpuScheduleFCFS, &td);
+        if (curAlgo == 3) {
+        	error = pthread_create(&cpuTID, NULL, cpuScheduleRR, &td);
+        } else {
+        	error = pthread_create(&cpuTID, NULL, cpuScheduleFCFS, &td);
+        }
         if(error != 0){
             printf("CPU thread could not be created\n");
             exit(1);
