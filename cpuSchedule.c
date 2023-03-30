@@ -3,7 +3,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <unistd.h>
-#include <time.h>
+#include <sys/time.h>
 
 #define BUF_SIZE 128
 #define DEBUG 0
@@ -16,11 +16,13 @@ pthread_mutex_t io_lock;
  * The node used in the doubly linked list, allows us to get the next and previous values
 */
 typedef struct listNode{
-    //might need to add more variables for priority and other things
     int* proc;
     int prior;
     int size;
     int index;
+    suseconds_t arrivalTime;
+    suseconds_t waitTime;
+    suseconds_t execTime;
     struct listNode *next;
     struct listNode *prev;
 }node;
@@ -40,6 +42,7 @@ struct thread_data{
     FILE *f; //the file pointer of the file we are looking at
     DLL *r; //the ready queue for what we store all our processes in for cpu bursts
     DLL *ioq;
+    DLL *comp;
     int alg;
 };
 
@@ -69,7 +72,7 @@ DLL * newDLL(){
  * Paramters: d, the doubly linked list we are adding the node into
  *            s, The contents we are adding into the node, this could be changed from string to an int
 */
-void insert_node_back(int *tokens,int i, int size, int priority, DLL *d){
+void insertNewNode(int *tokens,int i, int size, int priority, DLL *d){
     
     node *n = (node *) malloc(sizeof(node));
     if(n == NULL) exit(1);
@@ -77,8 +80,14 @@ void insert_node_back(int *tokens,int i, int size, int priority, DLL *d){
     n->proc = tokens;
     n->prior = priority;
     n->size = size;
-    
     n->index = i;
+
+    struct timeval t;
+    gettimeofday(&t, 0);
+    n->arrivalTime = t.tv_usec;
+    n->waitTime = 0;
+    n->execTime = 0;
+
     if(d->head == NULL){
         n->next = NULL;
         n->prev = NULL;
@@ -157,13 +166,19 @@ void *  parse_input(void *param){
             
             tokens[size] = -1;
             pthread_mutex_lock(&ready_lock);
-            insert_node_back(tokens, 0, size, priority, d);
+            insertNewNode(tokens, 0, size, priority, d);
             pthread_mutex_unlock(&ready_lock);
         }
     }
 
     free(Str1);
     return NULL;        
+}
+
+suseconds_t updateTime(node* n) {
+	struct timeval t;
+	gettimeofday(&t, 0);
+    return t.tv_usec - (n->arrivalTime + n->waitTime + n->execTime);
 }
 
 
@@ -200,7 +215,7 @@ void * ioSchedule(void* param){
         //Have to wait until ready queue is open to add more to it
         //Put the process back on the ready queue
         pthread_mutex_lock(&ready_lock);
-        insert_node_back(temp->proc,++index, temp->size, temp->prior, d);
+        insertNewNode(temp->proc,++index, temp->size, temp->prior, d);
         pthread_mutex_unlock(&ready_lock);
         //Get the next I/O burst time
 	free(temp);
@@ -272,13 +287,15 @@ node * schedulePR(DLL *d){
     n->prev->next = n->next;
     return n;
 }
-void* cpuScheduleFCFS(void* param) {
+void* cpuSchedule(void* param) {
     struct thread_data *myTD = (struct thread_data *) param;
     DLL *d = myTD->r;
     DLL *io = myTD->ioq;
+    DLL *comp = myTD->comp;
     int algo = myTD->alg;
     float zzz;
     node *temp = NULL;
+
     while (stop != 1 || d->head != NULL || io->head != NULL) {
 	while (d->head == NULL) {
 	    // waiting for process in the ready queue
@@ -293,6 +310,8 @@ void* cpuScheduleFCFS(void* param) {
         if(algo == 2) { temp = schedulePR(d); }
         pthread_mutex_unlock(&ready_lock);
 
+        temp->waitTime += updateTime(temp);
+
         //Then the designated amount of cpu burst time
         int index = temp->index;  
 	zzz = temp->proc[index] / 1000.0;
@@ -302,22 +321,19 @@ void* cpuScheduleFCFS(void* param) {
         //Then sleep for the appropiate amount in milliseconds
 	sleep(zzz);
         
+		temp->execTime += updateTime(temp);
+
         //Once done, either move the process to the i/o queue or terminate process if it's the last burst
 	if ( index < temp->size-1 ) {
             //If the I/O queue can be manipulated, then add to I/O queue
             pthread_mutex_lock(&io_lock);
-            insert_node_back(temp->proc, ++index, temp->size, temp->prior, io);
+            insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
             pthread_mutex_unlock(&io_lock);
 
 	}else{    
             free(temp->proc);
         }
-        //Or add back to list if there still process time left after quantum for when we implement Round Robin
-
-	//free item from queue, since it's no longer needed
-	free(temp);
-	
-        //Schedule another process for ready queue
+        insertNewNode(temp->proc, 0, temp->size, temp->prior, comp);
     }
         
     return NULL;
@@ -335,6 +351,7 @@ void* cpuScheduleRR(void* param) {
 	struct thread_data *myTD = (struct thread_data *) param;
     DLL *d = myTD->r;
     DLL *io = myTD->ioq;
+    DLL *comp = myTD->comp;
     float zzz;
     node *temp = NULL;
     int procRunTime = 0;
@@ -353,6 +370,8 @@ void* cpuScheduleRR(void* param) {
         temp = scheduleFCFS(d); // FCFS & RR get procs the same way (top of DLL)
         pthread_mutex_unlock(&ready_lock);
 
+        temp->waitTime += updateTime(temp);
+
         index = temp->index;
         procRunTime = min(temp->proc[index], quantum);
         temp->proc[index] -= procRunTime;
@@ -364,10 +383,14 @@ void* cpuScheduleRR(void* param) {
 		//Then sleep for the appropiate amount in milliseconds
 		sleep(zzz);
 
+		temp->execTime += updateTime(temp);
+
+		//printf("TIME: %ld | %ld\n", temp->waitTime, temp->execTime);
+
 		if (temp->proc[index] == 0) {
 			if (index < temp->size-1) {
 				pthread_mutex_lock(&io_lock);
-				insert_node_back(temp->proc, ++index, temp->size, temp->prior, io);
+				insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
 				pthread_mutex_unlock(&io_lock);
 			} else {
 				// proc is done
@@ -375,12 +398,12 @@ void* cpuScheduleRR(void* param) {
 			}
 		} else {
 			pthread_mutex_lock(&ready_lock);
-			insert_node_back(temp->proc, index, temp->size, temp->prior, d);
+			insertNewNode(temp->proc, index, temp->size, temp->prior, d);
 			pthread_mutex_unlock(&ready_lock);
 		}
 	}
 
-	free(temp);
+	insertNewNode(temp->proc, 0, temp->size, temp->prior, comp);
 	return NULL;
 }
 
@@ -434,6 +457,7 @@ int main(int argc, char const *argv[]) {
     int error;
     DLL* ready = newDLL();
     DLL* ioQueue = newDLL();
+    DLL* completedProc = newDLL();
     
     if (curAlgo == 3) {
     	fp = fopen(argv[6], "r");	
@@ -444,6 +468,7 @@ int main(int argc, char const *argv[]) {
         td.f = fp;
         td.r = ready;
         td.ioq = ioQueue;
+        td.comp = completedProc;
         td.alg = curAlgo;
 
         error = pthread_create(&tID, NULL, parse_input, &td);
@@ -456,7 +481,7 @@ int main(int argc, char const *argv[]) {
         if (curAlgo == 3) {
         	error = pthread_create(&cpuTID, NULL, cpuScheduleRR, &td);
         } else {
-        	error = pthread_create(&cpuTID, NULL, cpuScheduleFCFS, &td);
+        	error = pthread_create(&cpuTID, NULL, cpuSchedule, &td);
         }
         if(error != 0){
             printf("CPU thread could not be created\n");
@@ -500,6 +525,21 @@ int main(int argc, char const *argv[]) {
         exit(1);
     }
 
+    // calculating times
+
+    node* temp = completedProc->head;
+    float procAmount = 0;
+    long int wtSum = 0;
+    long int ttSum = 0;
+
+    while (temp != NULL) {
+    	procAmount++;
+    	wtSum += temp->waitTime;
+    	ttSum += temp->waitTime + temp->execTime;
+    	printf("TIME: %ld | %ld\n", temp->waitTime, temp->execTime);
+    	temp = temp->next;
+    }
+
     if(curAlgo == 3){
         printf("Input File Name                 : %s\n", argv[6]);
         printf("CPU Scheduling Alg              : %s (%d)\n", argv[2], quantum);
@@ -509,8 +549,10 @@ int main(int argc, char const *argv[]) {
     }
     
     printf("Throughput                      : %d\n", 1);
-    printf("Avg. Turnaround Time            : %d\n", 1);
-    printf("Avg. Waiting Time in Ready Queue: %d\n", 1);
+    printf("Avg. Turnaround Time            : %f\n", ttSum/procAmount);
+    printf("Avg. Waiting Time in Ready Queue: %f\n", wtSum/procAmount);
+
+    // memory clean-up
     free(ready);
     free(ioQueue);
     return 0;
