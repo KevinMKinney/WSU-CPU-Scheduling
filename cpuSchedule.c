@@ -6,11 +6,13 @@
 #include <sys/time.h>
 
 #define BUF_SIZE 128
-#define DEBUG 1
+#define DEBUG 0
 
 //Using mutexes for synchronization instead of semaphores
 pthread_mutex_t ready_lock;
 pthread_mutex_t io_lock;
+
+int usleep(suseconds_t usec);
 
 /**
  * The node used in the doubly linked list, allows us to get the next and previous values
@@ -146,15 +148,17 @@ void *  parse_input(void *param){
     while(fgets(Str1, BUF_SIZE, f)){
         if( strncmp("sleep", Str1, 5) == 0){
             //Case of sleep, get the value for how long and sleep
-            int val;
-
+            unsigned int val;
             char *TempStr = malloc(BUF_SIZE * sizeof(char));
             if(TempStr == NULL) exit(1);
 
             strncpy(TempStr, Str1+6, BUF_SIZE);
             val = atoi(TempStr);
             free(TempStr);
-            sleep(val/1000.0);
+	    if(usleep(val * 1000) == -1){
+                printf("Error with usleep\n");
+                exit(1);
+            }
             continue;
         }
         if(strncmp("stop", Str1, 4)==0){
@@ -194,8 +198,8 @@ void *  parse_input(void *param){
 }
 
 suseconds_t updateTime(node* n) {
-	struct timeval t;
-	gettimeofday(&t, 0);
+    struct timeval t;
+    gettimeofday(&t, 0);
     return t.tv_usec - (n->arrivalTime + n->waitTime + n->execTime);
 }
 
@@ -205,9 +209,8 @@ void * ioSchedule(void* param){
     struct thread_data *myTD = (struct thread_data *) param;
     DLL *d = myTD->r;
     DLL *io = myTD->ioq;
-    float zzz;
+    unsigned int zzz;
     node *temp = NULL;
-    
  
     while (stop != 1 || ready_empty(d) == 0 || io_empty(io) == 0) {
 	//The IO queue isn't the last thing, so if both are empty,then it is done
@@ -222,12 +225,14 @@ void * ioSchedule(void* param){
         //If anything in I/O queue, select fifo method, so get the head
         int index = temp->index;
         //Sleep for the given I/O burst time
-	zzz = temp->proc[index] / 1000.0;
+	zzz = temp->proc[index] * 1000;
 	if (DEBUG == 1) {
-	    printf("io proc is sleeping for %f\n", zzz);
+	    printf("io proc is sleeping for %d\n", zzz/1000);
 	}
-	sleep(zzz);
-        
+	if(usleep(zzz) == -1){
+            printf("Error with usleep\n");
+            exit(1);
+        }
         //Have to wait until ready queue is open to add more to it
         //Put the process back on the ready queue
         pthread_mutex_lock(&ready_lock);
@@ -288,7 +293,7 @@ void* cpuSchedule(void* param) {
     DLL *io = myTD->ioq;
     DLL *comp = myTD->comp;
     int algo = myTD->alg;
-    float zzz;
+    unsigned int zzz;
     node *temp = NULL;
     
     while (stop != 1 || ready_empty(d) == 0 || io_empty(io) == 0) {
@@ -312,13 +317,16 @@ void* cpuSchedule(void* param) {
 
         //Then the designated amount of cpu burst time
         int index = temp->index;  
-	zzz = temp->proc[index] / 1000.0;
+	zzz = temp->proc[index] * 1000;
 	if (DEBUG == 1) {
-		printf("cpu proc is sleeping for %f\n", zzz);
+		printf("cpu proc is sleeping for %d\n", zzz/1000);
 	}
         //Then sleep for the appropiate amount in milliseconds
-	sleep(zzz);
-        
+	if(usleep(zzz) == -1){
+            printf("Error with usleep\n");
+            exit(1);
+        }
+
 	temp->execTime += updateTime(temp);
 
         //Once done, either move the process to the i/o queue or terminate process if it's the last burst
@@ -365,7 +373,7 @@ void* cpuScheduleRR(void* param) {
     DLL *d = myTD->r;
     DLL *io = myTD->ioq;
     DLL *comp = myTD->comp;
-    float zzz;
+    unsigned int zzz;
     node *temp = NULL;
     int procRunTime = 0;
     int index = 0;
@@ -391,12 +399,15 @@ void* cpuScheduleRR(void* param) {
         procRunTime = min(temp->proc[index], quantum);
         temp->proc[index] -= procRunTime;
 		
-	zzz = procRunTime / 1000.0;
+	zzz = procRunTime * 1000;
 	if (DEBUG == 1) {
-	    printf("cpu proc is sleeping for %f\n", zzz);
+	    printf("cpu proc is sleeping for %d\n", zzz/1000);
 	}
 	//Then sleep for the appropiate amount in milliseconds
-	sleep(zzz);
+	if(usleep(zzz) == -1){
+            printf("Error with usleep\n");
+            exit(1);
+        }
 
 	temp->execTime += updateTime(temp);
 
