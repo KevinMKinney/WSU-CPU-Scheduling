@@ -6,7 +6,7 @@
 #include <sys/time.h>
 
 #define BUF_SIZE 128
-#define DEBUG 0
+#define DEBUG 1
 
 //Using mutexes for synchronization instead of semaphores
 pthread_mutex_t ready_lock;
@@ -22,9 +22,9 @@ typedef struct listNode{
     int prior;
     int size;
     int index;
-    suseconds_t arrivalTime;
-    suseconds_t waitTime;
-    suseconds_t execTime;
+    double arrivalTime;
+   	double waitTime;
+    double execTime;
     struct listNode *next;
     struct listNode *prev;
 }node;
@@ -73,6 +73,25 @@ DLL * newDLL(){
  * Paramters: d, the doubly linked list we are adding the node into
  *            s, The contents we are adding into the node, this could be changed from string to an int
 */
+void moveNode(node* n, DLL* d) {
+	if(d->head == NULL){
+        n->next = NULL;
+        n->prev = NULL;
+        d->head = n;
+        d->tail = n;
+    }else{
+    	node* temp = d->head;
+        while (temp->next != NULL) {
+        	temp = temp->next;
+        }
+
+        temp->next = n;
+        n->prev = temp;
+        n->next = NULL;
+        d->tail = n;
+    }
+}
+
 void insertNewNode(int *tokens,int i, int size, int priority, DLL *d){
     node *n = (node *) malloc(sizeof(node));
     if(n == NULL) exit(1);
@@ -84,10 +103,11 @@ void insertNewNode(int *tokens,int i, int size, int priority, DLL *d){
 
     struct timeval t;
     gettimeofday(&t, 0);
-    n->arrivalTime = t.tv_usec;
+    n->arrivalTime = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
     n->waitTime = 0;
     n->execTime = 0;
 
+    /*
     if(d->head == NULL){
         n->next = NULL;
         n->prev = NULL;
@@ -98,8 +118,26 @@ void insertNewNode(int *tokens,int i, int size, int priority, DLL *d){
         n->next = NULL;
         d->tail->next = n;
         d->tail = n;
-    }
+    }*/
+
+    moveNode(n, d);
+}
+
+void newInsertNewNode(int *tokens,int i, int size, int priority, suseconds_t arTime, suseconds_t wTime, suseconds_t eTime, DLL *d){
     
+    node *n = (node *) malloc(sizeof(node));
+    if(n == NULL) exit(1);
+
+    n->proc = tokens;
+    n->prior = priority;
+    n->size = size;
+    n->index = i;
+
+    n->arrivalTime = arTime;
+    n->waitTime = wTime;
+    n->execTime = eTime;
+
+    moveNode(n, d);
 }
 
 /**
@@ -198,11 +236,12 @@ void *  parse_input(void *param){
 }
 
 suseconds_t updateTime(node* n) {
-    struct timeval t;
-    gettimeofday(&t, 0);
-    return t.tv_usec - (n->arrivalTime + n->waitTime + n->execTime);
+	struct timeval t;
+	gettimeofday(&t, 0);
+	double curMili = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
+	//printf("Timessss: %f | %f | %f | %f\n", curMili, n->arrivalTime, n->waitTime, n->execTime);
+    return (curMili - (n->arrivalTime + n->waitTime + n->execTime));
 }
-
 
 void * ioSchedule(void* param){
     //Same as cpu scheduler, but more stuff
@@ -222,6 +261,8 @@ void * ioSchedule(void* param){
         temp = io->head;
         pthread_mutex_unlock(&io_lock);
 
+        startTime = updateTime(temp);
+        
         //If anything in I/O queue, select fifo method, so get the head
         int index = temp->index;
         //Sleep for the given I/O burst time
@@ -236,8 +277,14 @@ void * ioSchedule(void* param){
         //Have to wait until ready queue is open to add more to it
         //Put the process back on the ready queue
         pthread_mutex_lock(&ready_lock);
-        insertNewNode(temp->proc,++index, temp->size, temp->prior, d);
+        //insertNewNode(temp->proc,++index, temp->size, temp->prior, d);
+        //temp->index += 1;
+        //moveNode(temp, d);
+        newInsertNewNode(temp->proc,++index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, d);
         pthread_mutex_unlock(&ready_lock);
+
+        //Get the next I/O burst time
+	free(temp);
         
         //Remove the node from the IO queue 
         pthread_mutex_lock(&io_lock);
@@ -333,7 +380,10 @@ void* cpuSchedule(void* param) {
 	if ( index < temp->size-1 ) {
             //If the I/O queue can be manipulated, then add to I/O queue
             pthread_mutex_lock(&io_lock);
-            insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
+            //insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
+            //temp->index += 1;
+        	//moveNode(temp, io);
+        	newInsertNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, io);
             pthread_mutex_unlock(&io_lock);
 
 	}else{    
@@ -399,9 +449,38 @@ void* cpuScheduleRR(void* param) {
         procRunTime = min(temp->proc[index], quantum);
         temp->proc[index] -= procRunTime;
 		
-	zzz = procRunTime * 1000;
-	if (DEBUG == 1) {
-	    printf("cpu proc is sleeping for %d\n", zzz/1000);
+		zzz = procRunTime / 1000.0;
+		if (DEBUG == 1) {
+			printf("cpu proc is sleeping for %f\n", zzz);
+		}
+		//Then sleep for the appropiate amount in milliseconds
+		sleep(zzz);
+
+		//temp->execTime += updateTime(temp);
+		temp->execTime += procRunTime;
+
+		//printf("TIME: %ld | %ld\n", temp->waitTime, temp->execTime);
+
+		if (temp->proc[index] == 0) {
+			if (index < temp->size-1) {
+				pthread_mutex_lock(&io_lock);
+				//insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
+				newInsertNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, io);
+				pthread_mutex_unlock(&io_lock);
+			} else {
+				// proc is done
+				//free(temp->proc);
+
+				//insertNewNode(temp->proc, 0, temp->size, temp->prior, comp);
+				newInsertNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, comp);
+
+			}
+		} else {
+			pthread_mutex_lock(&ready_lock);
+			//insertNewNode(temp->proc, index, temp->size, temp->prior, d);
+			newInsertNewNode(temp->proc, index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, d);
+			pthread_mutex_unlock(&ready_lock);
+		}
 	}
 	//Then sleep for the appropiate amount in milliseconds
 	if(usleep(zzz) == -1){
@@ -490,12 +569,18 @@ int main(int argc, char const *argv[]) {
     DLL* ready = newDLL();
     DLL* ioQueue = newDLL();
     DLL* completedProc = newDLL();
+    struct timeval t;
+    double startTime = 0;
     
     if (curAlgo == 3) {
     	fp = fopen(argv[6], "r");	
     } else {
     	fp = fopen(argv[4], "r");
     }
+
+    gettimeofday(&t, 0);
+    startTime = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
+
     if(fp){
         td.f = fp;
         td.r = ready;
@@ -558,6 +643,8 @@ int main(int argc, char const *argv[]) {
 
     // calculating times
 
+    gettimeofday(&t, 0);
+    double endTime = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);;
     node* temp = completedProc->head;
     float procAmount = 0;
     long int wtSum = 0;
@@ -567,7 +654,9 @@ int main(int argc, char const *argv[]) {
     	procAmount++;
     	wtSum += temp->waitTime;
     	ttSum += temp->waitTime + temp->execTime;
-    	printf("TIME: %ld | %ld\n", temp->waitTime, temp->execTime);
+    	if (DEBUG == 1) {
+    		printf("process #%d times: wait - %f | exec - %f\n", (int) procAmount, temp->waitTime, temp->execTime);
+    	}
     	temp = temp->next;
     }
 
@@ -579,7 +668,7 @@ int main(int argc, char const *argv[]) {
         printf("CPU Scheduling Alg              : %s\n", argv[2]);
     }
     
-    printf("Throughput                      : %d\n", 1);
+    printf("Throughput                      : %f\n", procAmount/((endTime - startTime)));
     printf("Avg. Turnaround Time            : %f\n", ttSum/procAmount);
     printf("Avg. Waiting Time in Ready Queue: %f\n", wtSum/procAmount);
 
