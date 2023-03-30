@@ -4,7 +4,9 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <time.h>
+
 #define BUF_SIZE 128
+#define DEBUG 0
 
 //Using mutexes for synchronization instead of semaphores
 pthread_mutex_t ready_lock;
@@ -190,7 +192,9 @@ void * ioSchedule(void* param){
         int index = temp->index;
         //Sleep for the given I/O burst time
 	zzz = temp->proc[index] / 1000.0;
-	printf("io proc is sleeping for %f\n", zzz);
+	if (DEBUG == 1) {
+		printf("io proc is sleeping for %f\n", zzz);
+	}
 	sleep(zzz);
         
         //Have to wait until ready queue is open to add more to it
@@ -292,7 +296,9 @@ void* cpuScheduleFCFS(void* param) {
         //Then the designated amount of cpu burst time
         int index = temp->index;  
 	zzz = temp->proc[index] / 1000.0;
-	printf("cpu proc is sleeping for %f\n", zzz);
+	if (DEBUG == 1) {
+		printf("cpu proc is sleeping for %f\n", zzz);
+	}
         //Then sleep for the appropiate amount in milliseconds
 	sleep(zzz);
         
@@ -352,7 +358,9 @@ void* cpuScheduleRR(void* param) {
         temp->proc[index] -= procRunTime;
 		
 		zzz = procRunTime / 1000.0;
-		printf("cpu proc is sleeping for %f\n", zzz);
+		if (DEBUG == 1) {
+			printf("cpu proc is sleeping for %f\n", zzz);
+		}
 		//Then sleep for the appropiate amount in milliseconds
 		sleep(zzz);
 
