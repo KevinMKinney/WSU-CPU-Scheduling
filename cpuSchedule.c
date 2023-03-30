@@ -250,6 +250,8 @@ void * ioSchedule(void* param){
     DLL *io = myTD->ioq;
     unsigned int zzz;
     node *temp = NULL;
+    double startTime = 0;
+    double endTime = 0;
  
     while (stop != 1 || ready_empty(d) == 0 || io_empty(io) == 0) {
 	//The IO queue isn't the last thing, so if both are empty,then it is done
@@ -274,6 +276,10 @@ void * ioSchedule(void* param){
             printf("Error with usleep\n");
             exit(1);
         }
+
+        endTime = updateTime(temp);
+        temp->waitTime -= (endTime - startTime);
+
         //Have to wait until ready queue is open to add more to it
         //Put the process back on the ready queue
         pthread_mutex_lock(&ready_lock);
@@ -388,7 +394,7 @@ void* cpuSchedule(void* param) {
 
 	}else{    
             free(temp->proc);
-            insertNewNode(temp->proc, 0, temp->size, temp->prior, comp);
+            newInsertNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, comp);
         }
         
         //Remove from the queue once the node is done
@@ -437,9 +443,9 @@ void* cpuScheduleRR(void* param) {
     while (stop != 1 || ready_empty(d) == 0 || io_empty(io) == 0) {
         //Guaranteed that cpu burst will be the last, so if any queue has something in it
         //there will be a cpu burst at the end
-	while (d->head == NULL);
+	while (d->head == NULL) {};
 
-	pthread_mutex_lock(&ready_lock);
+		pthread_mutex_lock(&ready_lock);
         temp = scheduleFCFS(d); // FCFS & RR get procs the same way (top of DLL)
         pthread_mutex_unlock(&ready_lock);
 
@@ -451,10 +457,13 @@ void* cpuScheduleRR(void* param) {
 		
 		zzz = procRunTime / 1000.0;
 		if (DEBUG == 1) {
-			printf("cpu proc is sleeping for %f\n", zzz);
+			printf("cpu proc is sleeping for %d\n", zzz);
 		}
 		//Then sleep for the appropiate amount in milliseconds
-		sleep(zzz);
+		if(usleep(zzz) == -1){
+            printf("Error with usleep\n");
+            exit(1);
+        }
 
 		//temp->execTime += updateTime(temp);
 		temp->execTime += procRunTime;
@@ -473,7 +482,7 @@ void* cpuScheduleRR(void* param) {
 
 				//insertNewNode(temp->proc, 0, temp->size, temp->prior, comp);
 				newInsertNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, comp);
-
+				free(temp->proc);
 			}
 		} else {
 			pthread_mutex_lock(&ready_lock);
@@ -481,40 +490,13 @@ void* cpuScheduleRR(void* param) {
 			newInsertNewNode(temp->proc, index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, d);
 			pthread_mutex_unlock(&ready_lock);
 		}
-	}
-	//Then sleep for the appropiate amount in milliseconds
-	if(usleep(zzz) == -1){
-            printf("Error with usleep\n");
-            exit(1);
-        }
 
-	temp->execTime += updateTime(temp);
-
-	//printf("TIME: %ld | %ld\n", temp->waitTime, temp->execTime);
-
-	if (temp->proc[index] == 0) {
-            //Put on the IO queue if it's done
-	    if (index < temp->size-1) {
-		pthread_mutex_lock(&io_lock);
-		insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
-		pthread_mutex_unlock(&io_lock);
-	    } else {
-		// proc is done, remove from queue
-	        insertNewNode(temp->proc, 0, temp->size, temp->prior, comp);
-		free(temp->proc);
-	    }
-	} else {
-            //Put it back on the ready queue is there still time left
-	    pthread_mutex_lock(&ready_lock);
-	    insertNewNode(temp->proc, index, temp->size, temp->prior, d);
-	    pthread_mutex_unlock(&ready_lock);
-	}
-        //Remove the node from the queue
-	pthread_mutex_lock(&ready_lock);
+		//Remove the node from the queue
+		pthread_mutex_lock(&ready_lock);
         d->head = temp->next;
         temp->prev = NULL;
-	pthread_mutex_unlock(&ready_lock);
-    }
+		pthread_mutex_unlock(&ready_lock);
+	}
 
     return NULL;
 }
