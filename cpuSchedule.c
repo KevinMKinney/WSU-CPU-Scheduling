@@ -49,7 +49,6 @@ struct thread_data{
 // needs to be global so threads can comunicate
 struct thread_data td;
 int stop = 0;
-int cpuStop = 0;
 int quantum = 0;
 
 /**
@@ -118,6 +117,24 @@ void free_DLL(DLL *d){
     free(n);
 }
 
+int ready_empty(DLL *r){
+    int check;
+    pthread_mutex_lock(&ready_lock);
+    if(r->head == NULL) check = 1;
+    else check = 0;
+    pthread_mutex_unlock(&ready_lock);
+    return check;
+}
+
+int io_empty(DLL *r){
+    int check;
+    pthread_mutex_lock(&io_lock);
+    if(r->head == NULL) check = 1;
+    else check = 0;
+    pthread_mutex_unlock(&io_lock);
+    return check;
+}
+
 void *  parse_input(void *param){
     struct thread_data *myTD = (struct thread_data *) param;
     FILE *f = myTD->f;
@@ -131,8 +148,9 @@ void *  parse_input(void *param){
             //Case of sleep, get the value for how long and sleep
             int val;
 
-            //Need a malloc check
             char *TempStr = malloc(BUF_SIZE * sizeof(char));
+            if(TempStr == NULL) exit(1);
+
             strncpy(TempStr, Str1+6, BUF_SIZE);
             val = atoi(TempStr);
             free(TempStr);
@@ -164,6 +182,7 @@ void *  parse_input(void *param){
             }
             
             tokens[size] = -1;
+            //Put the process on the ready queue
             pthread_mutex_lock(&ready_lock);
             insertNewNode(tokens, 0, size, priority, d);
             pthread_mutex_unlock(&ready_lock);
@@ -190,9 +209,9 @@ void * ioSchedule(void* param){
     node *temp = NULL;
     
  
-    while (stop != 1 || cpuStop != 1 || io->head != NULL) {
-	
-        if(io->head == NULL) { continue; }
+    while (stop != 1 || ready_empty(d) == 0 || io_empty(io) == 0) {
+	//The IO queue isn't the last thing, so if both are empty,then it is done
+        if(io_empty(io) == 1) continue; 
         // waiting for process in the io queue
         //If out of jobs, meaning the cpu queue has stopped, then finish with thread
         //Lock the io queue, get/remove the head of queue
@@ -205,7 +224,7 @@ void * ioSchedule(void* param){
         //Sleep for the given I/O burst time
 	zzz = temp->proc[index] / 1000.0;
 	if (DEBUG == 1) {
-		printf("io proc is sleeping for %f\n", zzz);
+	    printf("io proc is sleeping for %f\n", zzz);
 	}
 	sleep(zzz);
         
@@ -214,12 +233,11 @@ void * ioSchedule(void* param){
         pthread_mutex_lock(&ready_lock);
         insertNewNode(temp->proc,++index, temp->size, temp->prior, d);
         pthread_mutex_unlock(&ready_lock);
-        //Get the next I/O burst time
         
+        //Remove the node from the IO queue 
         pthread_mutex_lock(&io_lock);
 	io->head = temp->next;
         pthread_mutex_unlock(&io_lock);
-	free(temp);
 
     }
     return NULL;
@@ -231,7 +249,7 @@ void * ioSchedule(void* param){
 //Returns the next process node for the cpu to do, and removes it from queue 
 node * scheduleFCFS(DLL *d){
     node *n = d->head;
-    d->head = n->next;
+    //d->head = n->next;
     //d->head->prev = NULL;
     return n;
 }
@@ -248,18 +266,6 @@ node * scheduleSJF(DLL *d){
         }
         a = a->next;
     }
-    if(n == d->head){
-        d->head = n->next;
-        n->prev = NULL;
-        return n;
-    }
-    else if(n== d->tail){
-        d->tail = n->prev;
-        n->prev->next = NULL;
-        return n;
-    }
-    n->next->prev = n->prev;    
-    n->prev->next = n->next;
     return n;
 }
 
@@ -274,18 +280,6 @@ node * schedulePR(DLL *d){
         }
         a = a->next;
     }
-    if(n == d->head){
-        d->head = n->next;
-        n->prev = NULL;
-        return n;
-    }
-    else if(n== d->tail){
-        d->tail = n->prev;
-        n->prev->next = NULL;
-        return n;
-    }
-    n->next->prev = n->prev;    
-    n->prev->next = n->next;
     return n;
 }
 void* cpuSchedule(void* param) {
@@ -297,18 +291,21 @@ void* cpuSchedule(void* param) {
     float zzz;
     node *temp = NULL;
     
-    while (stop != 1 || d->head != NULL || io->head != NULL){
-	if(d->head == NULL) { continue;
-	    // waiting for process in the ready queue
-            //always guaranteed to end with cpu burst
-	}
+    while (stop != 1 || ready_empty(d) == 0 || io_empty(io) == 0) {
+	
+	// waiting for process in the ready queue
+        //always guaranteed to end with cpu burst
+        while(d->head == NULL); 
+
         //Mutex used to synchronize ready queue
 
-        //Get the first process in the ready queue, if unlocked by mutex
         pthread_mutex_lock(&ready_lock);
-        if(algo == 0 || algo == 3) { temp = scheduleFCFS(d); }
-        if(algo == 1) { temp = scheduleSJF(d); }
-        if(algo == 2) { temp = schedulePR(d); }
+        
+        //Get the process in the ready queue based on the scheduler
+        //if unlocked by mutex
+        if(algo == 0 || algo == 3) temp = scheduleFCFS(d);
+        if(algo == 1) temp = scheduleSJF(d); 
+        if(algo == 2) temp = schedulePR(d);
         pthread_mutex_unlock(&ready_lock);
 
         temp->waitTime += updateTime(temp);
@@ -335,16 +332,31 @@ void* cpuSchedule(void* param) {
             free(temp->proc);
             insertNewNode(temp->proc, 0, temp->size, temp->prior, comp);
         }
+        
+        //Remove from the queue once the node is done
+        pthread_mutex_lock(&ready_lock);
+        if(temp == d->head){
+            d->head = temp->next;
+            temp->prev = NULL;
+        }
+        else if(temp== d->tail){
+            d->tail = temp->prev;
+            temp->prev->next = NULL;
+        }else{
+            temp->next->prev = temp->prev;    
+            temp->prev->next = temp->next;
+        }
+        pthread_mutex_unlock(&ready_lock);
     }
         
     return NULL;
 }
 
 int min(int a, int b) {
-	if (a > b) {
-		return b;
-	}
-	return a;
+    if (a > b) {
+        return b;
+    }
+    return a;
 }
 
 // scheduler for round robin
@@ -364,8 +376,10 @@ void* cpuScheduleRR(void* param) {
 		// If it is finished or blocked, pick another proc immediantly
 	// Repeat
 
-    while (stop != 1 || d->head != NULL || io->head != NULL) {
-	while (d->head == NULL) {}
+    while (stop != 1 || ready_empty(d) == 0 || io_empty(io) == 0) {
+        //Guaranteed that cpu burst will be the last, so if any queue has something in it
+        //there will be a cpu burst at the end
+	while (d->head == NULL);
 
 	pthread_mutex_lock(&ready_lock);
         temp = scheduleFCFS(d); // FCFS & RR get procs the same way (top of DLL)
@@ -389,20 +403,27 @@ void* cpuScheduleRR(void* param) {
 	//printf("TIME: %ld | %ld\n", temp->waitTime, temp->execTime);
 
 	if (temp->proc[index] == 0) {
+            //Put on the IO queue if it's done
 	    if (index < temp->size-1) {
 		pthread_mutex_lock(&io_lock);
 		insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
 		pthread_mutex_unlock(&io_lock);
 	    } else {
-		// proc is done
+		// proc is done, remove from queue
 	        insertNewNode(temp->proc, 0, temp->size, temp->prior, comp);
 		free(temp->proc);
 	    }
 	} else {
+            //Put it back on the ready queue is there still time left
 	    pthread_mutex_lock(&ready_lock);
 	    insertNewNode(temp->proc, index, temp->size, temp->prior, d);
 	    pthread_mutex_unlock(&ready_lock);
 	}
+        //Remove the node from the queue
+	pthread_mutex_lock(&ready_lock);
+        d->head = temp->next;
+        temp->prev = NULL;
+	pthread_mutex_unlock(&ready_lock);
     }
 
     return NULL;
@@ -512,7 +533,6 @@ int main(int argc, char const *argv[]) {
     	printf("CPU thread returned an error\n");
     	exit(1);
     }
-    cpuStop = 1;
 
     pthread_join(ioTID, &thread_result);
     if (thread_result != 0) {
