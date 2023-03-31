@@ -455,9 +455,9 @@ void* cpuScheduleRR(void* param) {
         procRunTime = min(temp->proc[index], quantum);
         temp->proc[index] -= procRunTime;
 		
-		zzz = procRunTime / 1000.0;
+		zzz = procRunTime  * 1000;
 		if (DEBUG == 1) {
-			printf("cpu proc is sleeping for %d\n", zzz);
+			printf("cpu proc is sleeping for %d\n", zzz/1000);
 		}
 		//Then sleep for the appropiate amount in milliseconds
 		if(usleep(zzz) == -1){
