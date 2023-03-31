@@ -23,6 +23,7 @@ typedef struct listNode{
     int size;
     int index;
     double arrivalTime;
+    double lastUsed;
    	double waitTime;
     double execTime;
     struct listNode *next;
@@ -106,11 +107,7 @@ void insertNewNode(int *tokens,int i, int size, int priority, DLL *d){
     gettimeofday(&t, 0);
     n->arrivalTime = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
     
-    /*
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    n->arrivalTime = t.tv_sec * 1000.0 + (t.tv_nsec/1000.0);
-    */
+    n->lastUsed = n->arrivalTime;
     n->waitTime = 0;
     n->execTime = 0;
 
@@ -130,7 +127,7 @@ void insertNewNode(int *tokens,int i, int size, int priority, DLL *d){
     moveNode(n, d);
 }
 
-void newInsertNewNode(int *tokens,int i, int size, int priority, double arTime, double wTime, double eTime, DLL *d){
+void newInsertNewNode(int *tokens,int i, int size, int priority, double arTime, double lu, double wTime, double eTime, DLL *d){
     
     node *n = (node *) malloc(sizeof(node));
     if(n == NULL) exit(1);
@@ -141,6 +138,7 @@ void newInsertNewNode(int *tokens,int i, int size, int priority, double arTime, 
     n->index = i;
 
     n->arrivalTime = arTime;
+    n->lastUsed = lu;
     n->waitTime = wTime;
     n->execTime = eTime;
 
@@ -277,7 +275,7 @@ void * ioSchedule(void* param){
             exit(1);
         }
 
-		temp->arrivalTime = getTime(temp);
+		temp->lastUsed = getTime(temp);
 
         //Have to wait until ready queue is open to add more to it
         //Put the process back on the ready queue
@@ -285,7 +283,7 @@ void * ioSchedule(void* param){
         //insertNewNode(temp->proc,++index, temp->size, temp->prior, d);
         //temp->index += 1;
         //moveNode(temp, d);
-        newInsertNewNode(temp->proc,++index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, d);
+        newInsertNewNode(temp->proc,++index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, d);
         pthread_mutex_unlock(&ready_lock);
 
         //Get the next I/O burst time
@@ -364,7 +362,7 @@ void* cpuSchedule(void* param) {
         if(algo == 2) temp = schedulePR(d);
         pthread_mutex_unlock(&ready_lock);
 
-        temp->waitTime += getTime(temp) - temp->arrivalTime;
+        temp->waitTime += getTime(temp) - temp->lastUsed;
 
         //Then the designated amount of cpu burst time
         int index = temp->index;  
@@ -387,11 +385,12 @@ void* cpuSchedule(void* param) {
             //insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
             //temp->index += 1;
         	//moveNode(temp, io);
-            newInsertNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, io);
+            newInsertNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, io);
             pthread_mutex_unlock(&io_lock);
 
 	}else{    
-            newInsertNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, comp);
+			temp->lastUsed = getTime(temp);
+            newInsertNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, comp);
             free(temp->proc);
         }
         
@@ -409,6 +408,7 @@ void* cpuSchedule(void* param) {
             temp->prev->next = temp->next;
         }
         pthread_mutex_unlock(&ready_lock);
+
 	free(temp);
     }
         
@@ -448,7 +448,8 @@ void* cpuScheduleRR(void* param) {
         temp = scheduleFCFS(d); // FCFS & RR get procs the same way (top of DLL)
         pthread_mutex_unlock(&ready_lock);
 
-        temp->waitTime += getTime(temp) - temp->arrivalTime;
+        //printf("Update wait : %f\n", getTime(temp) - temp->lastUsed);
+        temp->waitTime += getTime(temp) - temp->lastUsed;
 
         index = temp->index;
         procRunTime = min(temp->proc[index], quantum);
@@ -470,20 +471,20 @@ void* cpuScheduleRR(void* param) {
 	        if (index < temp->size-1) {
 		    pthread_mutex_lock(&io_lock);
 		    //insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
-		    newInsertNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, io);
+		    newInsertNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, io);
 		    pthread_mutex_unlock(&io_lock);
 		} else {
 		    // proc is done
-		    //free(temp->proc);
+		    temp->lastUsed = getTime(temp);
 
 		    //insertNewNode(temp->proc, 0, temp->size, temp->prior, comp);
-		    newInsertNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, comp);
+		    newInsertNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, comp);
 		    free(temp->proc);
 		}
 	    } else {
 	    	pthread_mutex_lock(&ready_lock);
 	    	//insertNewNode(temp->proc, index, temp->size, temp->prior, d);
-	    	newInsertNewNode(temp->proc, index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, d);
+	    	newInsertNewNode(temp->proc, index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, d);
 	    	pthread_mutex_unlock(&ready_lock);
 	    }
 
@@ -626,15 +627,19 @@ int main(int argc, char const *argv[]) {
     double endTime = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
     node* temp = completedProc->head;
     float procAmount = 0;
-    long int wtSum = 0;
-    long int ttSum = 0;
+    double wtSum = 0;
+    double ttSum = 0;
+
+    if (DEBUG == 1) {
+    	printf("Time taken: %f\n", endTime - startTime);
+    }
 
     while (temp != NULL) {
     	procAmount++;
     	wtSum += temp->waitTime;
-    	ttSum += temp->waitTime + temp->execTime;
+    	ttSum += temp->lastUsed - temp->arrivalTime;
     	if (DEBUG == 1) {
-    		printf("process #%d times: wait - %f | exec - %f\n", (int) procAmount, temp->waitTime, temp->execTime);
+    		printf("process #%d times: wait - %f | exec - %f | turn around - %f\n", (int) procAmount, temp->waitTime, temp->execTime, temp->lastUsed - temp->arrivalTime);
     	}
     	temp = temp->next;
     }
