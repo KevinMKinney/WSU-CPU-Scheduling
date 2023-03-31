@@ -448,7 +448,6 @@ void* cpuScheduleRR(void* param) {
         temp = scheduleFCFS(d); // FCFS & RR get procs the same way (top of DLL)
         pthread_mutex_unlock(&ready_lock);
 
-        //printf("Update wait : %f\n", getTime(temp) - temp->lastUsed);
         temp->waitTime += getTime(temp) - temp->lastUsed;
 
         index = temp->index;
@@ -482,6 +481,9 @@ void* cpuScheduleRR(void* param) {
 		    free(temp->proc);
 		}
 	    } else {
+
+	    	temp->lastUsed = getTime(temp);
+
 	    	pthread_mutex_lock(&ready_lock);
 	    	//insertNewNode(temp->proc, index, temp->size, temp->prior, d);
 	    	newInsertNewNode(temp->proc, index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, d);
