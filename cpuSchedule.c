@@ -101,9 +101,16 @@ void insertNewNode(int *tokens,int i, int size, int priority, DLL *d){
     n->size = size;
     n->index = i;
 
+    
     struct timeval t;
     gettimeofday(&t, 0);
     n->arrivalTime = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
+    
+    /*
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    n->arrivalTime = t.tv_sec * 1000.0 + (t.tv_nsec/1000.0);
+    */
     n->waitTime = 0;
     n->execTime = 0;
 
@@ -123,7 +130,7 @@ void insertNewNode(int *tokens,int i, int size, int priority, DLL *d){
     moveNode(n, d);
 }
 
-void newInsertNewNode(int *tokens,int i, int size, int priority, suseconds_t arTime, suseconds_t wTime, suseconds_t eTime, DLL *d){
+void newInsertNewNode(int *tokens,int i, int size, int priority, double arTime, double wTime, double eTime, DLL *d){
     
     node *n = (node *) malloc(sizeof(node));
     if(n == NULL) exit(1);
@@ -235,12 +242,11 @@ void *  parse_input(void *param){
     return NULL;        
 }
 
-suseconds_t updateTime(node* n) {
+double getTime(node* n) {
 	struct timeval t;
 	gettimeofday(&t, 0);
 	double curMili = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
-	//printf("Timessss: %f | %f | %f | %f\n", curMili, n->arrivalTime, n->waitTime, n->execTime);
-    return (curMili - (n->arrivalTime + n->waitTime + n->execTime));
+    return curMili;
 }
 
 void * ioSchedule(void* param){
@@ -250,8 +256,6 @@ void * ioSchedule(void* param){
     DLL *io = myTD->ioq;
     unsigned int zzz;
     node *temp = NULL;
-    double startTime = 0;
-    double endTime = 0;
  
     while (stop != 1 || ready_empty(d) == 0 || io_empty(io) == 0) {
 	//The IO queue isn't the last thing, so if both are empty,then it is done
@@ -262,8 +266,6 @@ void * ioSchedule(void* param){
         pthread_mutex_lock(&io_lock);
         temp = io->head;
         pthread_mutex_unlock(&io_lock);
-
-        startTime = updateTime(temp);
         
         //If anything in I/O queue, select fifo method, so get the head
         int index = temp->index;
@@ -277,8 +279,7 @@ void * ioSchedule(void* param){
             exit(1);
         }
 
-        endTime = updateTime(temp);
-        temp->waitTime -= (endTime - startTime);
+		temp->arrivalTime = getTime(temp);
 
         //Have to wait until ready queue is open to add more to it
         //Put the process back on the ready queue
@@ -358,7 +359,6 @@ void* cpuSchedule(void* param) {
         //Mutex used to synchronize ready queue
 
         pthread_mutex_lock(&ready_lock);
-        
         //Get the process in the ready queue based on the scheduler
         //if unlocked by mutex
         if(algo == 0 || algo == 3) temp = scheduleFCFS(d);
@@ -366,7 +366,7 @@ void* cpuSchedule(void* param) {
         if(algo == 2) temp = schedulePR(d);
         pthread_mutex_unlock(&ready_lock);
 
-        temp->waitTime += updateTime(temp);
+        temp->waitTime += getTime(temp) - temp->arrivalTime;
 
         //Then the designated amount of cpu burst time
         int index = temp->index;  
@@ -380,7 +380,7 @@ void* cpuSchedule(void* param) {
             exit(1);
         }
 
-	temp->execTime += updateTime(temp);
+	temp->execTime += temp->proc[index];
 
         //Once done, either move the process to the i/o queue or terminate process if it's the last burst
 	if ( index < temp->size-1 ) {
@@ -449,7 +449,7 @@ void* cpuScheduleRR(void* param) {
         temp = scheduleFCFS(d); // FCFS & RR get procs the same way (top of DLL)
         pthread_mutex_unlock(&ready_lock);
 
-        temp->waitTime += updateTime(temp);
+        temp->waitTime += getTime(temp) - temp->arrivalTime;
 
         index = temp->index;
         procRunTime = min(temp->proc[index], quantum);
@@ -465,10 +465,7 @@ void* cpuScheduleRR(void* param) {
             exit(1);
         }
 
-		//temp->execTime += updateTime(temp);
 		temp->execTime += procRunTime;
-
-		//printf("TIME: %ld | %ld\n", temp->waitTime, temp->execTime);
 
 		if (temp->proc[index] == 0) {
 			if (index < temp->size-1) {
@@ -626,7 +623,7 @@ int main(int argc, char const *argv[]) {
     // calculating times
 
     gettimeofday(&t, 0);
-    double endTime = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);;
+    double endTime = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
     node* temp = completedProc->head;
     float procAmount = 0;
     long int wtSum = 0;
