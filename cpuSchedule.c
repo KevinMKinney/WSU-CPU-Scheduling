@@ -75,20 +75,15 @@ DLL * newDLL(){
  *            s, The contents we are adding into the node, this could be changed from string to an int
 */
 void moveNode(node* n, DLL* d) {
-	if(d->head == NULL){
+    if(d->head == NULL){
         n->next = NULL;
         n->prev = NULL;
         d->head = n;
         d->tail = n;
     }else{
-    	node* temp = d->head;
-        while (temp->next != NULL) {
-        	temp = temp->next;
-        }
-
-        temp->next = n;
-        n->prev = temp;
+        n->prev = d->tail;
         n->next = NULL;
+        d->tail->next = n;
         d->tail = n;
     }
 }
@@ -111,23 +106,10 @@ void insertNewNode(int *tokens,int i, int size, int priority, DLL *d){
     n->waitTime = 0;
     n->execTime = 0;
 
-    /*
-    if(d->head == NULL){
-        n->next = NULL;
-        n->prev = NULL;
-        d->head = n;
-        d->tail = n;
-    }else{
-        n->prev = d->tail;
-        n->next = NULL;
-        d->tail->next = n;
-        d->tail = n;
-    }*/
-
     moveNode(n, d);
 }
 
-void newInsertNewNode(int *tokens,int i, int size, int priority, double arTime, double lu, double wTime, double eTime, DLL *d){
+void moveNewNode(int *tokens,int i, int size, int priority, double arTime, double lu, double wTime, double eTime, DLL *d){
     
     node *n = (node *) malloc(sizeof(node));
     if(n == NULL) exit(1);
@@ -241,8 +223,7 @@ void *  parse_input(void *param){
 double getTime(node* n) {
 	struct timeval t;
 	gettimeofday(&t, 0);
-	double curMili = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
-    return curMili;
+	return t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
 }
 
 void * ioSchedule(void* param){
@@ -283,7 +264,7 @@ void * ioSchedule(void* param){
         //insertNewNode(temp->proc,++index, temp->size, temp->prior, d);
         //temp->index += 1;
         //moveNode(temp, d);
-        newInsertNewNode(temp->proc,++index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, d);
+        moveNewNode(temp->proc,++index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, d);
         pthread_mutex_unlock(&ready_lock);
 
         //Get the next I/O burst time
@@ -385,12 +366,12 @@ void* cpuSchedule(void* param) {
             //insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
             //temp->index += 1;
         	//moveNode(temp, io);
-            newInsertNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, io);
+            moveNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, io);
             pthread_mutex_unlock(&io_lock);
 
 	}else{    
 			temp->lastUsed = getTime(temp);
-            newInsertNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, comp);
+            moveNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, comp);
             free(temp->proc);
         }
         
@@ -432,6 +413,7 @@ void* cpuScheduleRR(void* param) {
     node *temp = NULL;
     int procRunTime = 0;
     int index = 0;
+    double tempWaitTime = 0;
     
     // Dequeue proc from head of ready queue
     // Run job for at most one quantum
@@ -448,7 +430,8 @@ void* cpuScheduleRR(void* param) {
         temp = scheduleFCFS(d); // FCFS & RR get procs the same way (top of DLL)
         pthread_mutex_unlock(&ready_lock);
 
-        temp->waitTime += getTime(temp) - temp->lastUsed;
+        tempWaitTime = getTime(temp) - temp->lastUsed;
+        temp->waitTime += tempWaitTime;
 
         index = temp->index;
         procRunTime = min(temp->proc[index], quantum);
@@ -469,15 +452,14 @@ void* cpuScheduleRR(void* param) {
 	    if (temp->proc[index] == 0) {
 	        if (index < temp->size-1) {
 		    pthread_mutex_lock(&io_lock);
-		    //insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
-		    newInsertNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, io);
+
+		    moveNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, io);
 		    pthread_mutex_unlock(&io_lock);
 		} else {
 		    // proc is done
 		    temp->lastUsed = getTime(temp);
 
-		    //insertNewNode(temp->proc, 0, temp->size, temp->prior, comp);
-		    newInsertNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, comp);
+		    moveNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, comp);
 		    free(temp->proc);
 		}
 	    } else {
@@ -485,8 +467,11 @@ void* cpuScheduleRR(void* param) {
 	    	temp->lastUsed = getTime(temp);
 
 	    	pthread_mutex_lock(&ready_lock);
-	    	//insertNewNode(temp->proc, index, temp->size, temp->prior, d);
-	    	newInsertNewNode(temp->proc, index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, d);
+	    	moveNewNode(temp->proc, index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, d);
+	    	
+	    	if (d->head->lastUsed == temp->lastUsed) {
+	    		d->head->waitTime -= tempWaitTime;
+	    	}
 	    	pthread_mutex_unlock(&ready_lock);
 	    }
 
