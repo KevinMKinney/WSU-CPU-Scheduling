@@ -6,7 +6,7 @@
 #include <sys/time.h>
 
 #define BUF_SIZE 128
-#define DEBUG 1
+#define DEBUG 0
 
 //Using mutexes for synchronization instead of semaphores
 pthread_mutex_t ready_lock;
@@ -156,11 +156,9 @@ void free_DLL(DLL *d){
     node *t;
     while(n->next != NULL){
         t = n->next;
-        free(n->proc);        
         free(n);
         n = t;
     }
-    free(n->proc);
     free(n);
 }
 
@@ -291,12 +289,12 @@ void * ioSchedule(void* param){
         pthread_mutex_unlock(&ready_lock);
 
         //Get the next I/O burst time
-	free(temp);
         
         //Remove the node from the IO queue 
         pthread_mutex_lock(&io_lock);
 	io->head = temp->next;
         pthread_mutex_unlock(&io_lock);
+	free(temp);
 
     }
     return NULL;
@@ -389,12 +387,12 @@ void* cpuSchedule(void* param) {
             //insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
             //temp->index += 1;
         	//moveNode(temp, io);
-        	newInsertNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, io);
+            newInsertNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, io);
             pthread_mutex_unlock(&io_lock);
 
 	}else{    
-            free(temp->proc);
             newInsertNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, comp);
+            free(temp->proc);
         }
         
         //Remove from the queue once the node is done
@@ -411,6 +409,7 @@ void* cpuSchedule(void* param) {
             temp->prev->next = temp->next;
         }
         pthread_mutex_unlock(&ready_lock);
+	free(temp);
     }
         
     return NULL;
@@ -467,32 +466,33 @@ void* cpuScheduleRR(void* param) {
 
 		temp->execTime += procRunTime;
 
-		if (temp->proc[index] == 0) {
-			if (index < temp->size-1) {
-				pthread_mutex_lock(&io_lock);
-				//insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
-				newInsertNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, io);
-				pthread_mutex_unlock(&io_lock);
-			} else {
-				// proc is done
-				//free(temp->proc);
-
-				//insertNewNode(temp->proc, 0, temp->size, temp->prior, comp);
-				newInsertNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, comp);
-				free(temp->proc);
-			}
+	    if (temp->proc[index] == 0) {
+	        if (index < temp->size-1) {
+		    pthread_mutex_lock(&io_lock);
+		    //insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
+		    newInsertNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, io);
+		    pthread_mutex_unlock(&io_lock);
 		} else {
-			pthread_mutex_lock(&ready_lock);
-			//insertNewNode(temp->proc, index, temp->size, temp->prior, d);
-			newInsertNewNode(temp->proc, index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, d);
-			pthread_mutex_unlock(&ready_lock);
-		}
+		    // proc is done
+		    //free(temp->proc);
 
-		//Remove the node from the queue
-		pthread_mutex_lock(&ready_lock);
-        d->head = temp->next;
-        temp->prev = NULL;
-		pthread_mutex_unlock(&ready_lock);
+		    //insertNewNode(temp->proc, 0, temp->size, temp->prior, comp);
+		    newInsertNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, comp);
+		    free(temp->proc);
+		}
+	    } else {
+	    	pthread_mutex_lock(&ready_lock);
+	    	//insertNewNode(temp->proc, index, temp->size, temp->prior, d);
+	    	newInsertNewNode(temp->proc, index, temp->size, temp->prior, temp->arrivalTime, temp->waitTime, temp->execTime, d);
+	    	pthread_mutex_unlock(&ready_lock);
+	    }
+
+	    //Remove the node from the queue
+	    pthread_mutex_lock(&ready_lock);
+            d->head = temp->next;
+            temp->prev = NULL;
+	    pthread_mutex_unlock(&ready_lock);
+	    free(temp);
 	}
 
     return NULL;
@@ -652,6 +652,8 @@ int main(int argc, char const *argv[]) {
     printf("Avg. Waiting Time in Ready Queue: %f\n", wtSum/procAmount);
 
     // memory clean-up
+    free_DLL(completedProc);
+    free(completedProc);
     free(ready);
     free(ioQueue);
     return 0;
