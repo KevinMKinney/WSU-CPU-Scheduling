@@ -8,7 +8,7 @@
 #define BUF_SIZE 128
 #define DEBUG 0
 
-//Using mutexes for synchronization instead of semaphores
+//Using mutexes for synchronization between threads
 pthread_mutex_t ready_lock;
 pthread_mutex_t io_lock;
 
@@ -44,12 +44,12 @@ typedef struct doubleLinkedList{
 struct thread_data{
     FILE *f; //the file pointer of the file we are looking at
     DLL *r; //the ready queue for what we store all our processes in for cpu bursts
-    DLL *ioq;
-    DLL *comp;
+    DLL *ioq; //the io queue for what we store all our processes in for io bursts
+    DLL *comp; //the queue for what we store completed processes (used in time calculations)
     int alg;
 };
 
-// needs to be global so threads can comunicate
+// global so threads can comunicate
 struct thread_data td;
 int stop = 0;
 int quantum = 0;
@@ -71,8 +71,8 @@ DLL * newDLL(){
  * This is used to insert a new node into the linked list with the contents provided from the parameters. It is inserted into the back
  * unless the struct is empty, then we just add it to the front. 
  *
- * Paramters: d, the doubly linked list we are adding the node into
- *            s, The contents we are adding into the node, this could be changed from string to an int
+ * Paramters: n, the node that needs to move
+ *            d, the doubly linked list we are adding the node into
 */
 void moveNode(node* n, DLL* d) {
     if(d->head == NULL){
@@ -88,6 +88,15 @@ void moveNode(node* n, DLL* d) {
     }
 }
 
+/**
+ * This is used to make a new node from the parser thread or when the process' times are not set.
+ *
+ * Paramters: tokens, an array of the CPU and IO burst times
+ *            i, the index to the aformentioned array that the process is currently on
+ *            size, the length or size of the token array
+ *            priority, a number effecting the PR algorithm
+ *            d, the doubly linked list we are adding the node into 
+*/
 void insertNewNode(int *tokens,int i, int size, int priority, DLL *d){
     node *n = (node *) malloc(sizeof(node));
     if(n == NULL) exit(1);
@@ -109,6 +118,19 @@ void insertNewNode(int *tokens,int i, int size, int priority, DLL *d){
     moveNode(n, d);
 }
 
+/**
+ * This is used to make a new node between the CPU and IO threads.
+ *
+ * Paramters: tokens, an array of the CPU and IO burst times
+ *            i, the index to the aformentioned array that the process is currently on
+ *            size, the length or size of the token array
+ *            priority, a number effecting the PR algorithm
+ *            arTime, the time in which the process was originally parsed
+ *            lu, the time where the process was used before being sent to the ready queue
+ *            wTime, the total time the process spent in the ready queue
+ *            eTime, the total time the process spent executing
+ *            d, the doubly linked list we are adding the node into 
+*/
 void moveNewNode(int *tokens,int i, int size, int priority, double arTime, double lu, double wTime, double eTime, DLL *d){
     
     node *n = (node *) malloc(sizeof(node));
@@ -142,6 +164,10 @@ void free_DLL(DLL *d){
     free(n);
 }
 
+/**
+* This checks if the ready queue contains any processes. Returns 1 if empty, 0 if not empty.
+* Parameters: d, the doubly linked list to free it's values 
+*/
 int ready_empty(DLL *r){
     int check;
     pthread_mutex_lock(&ready_lock);
@@ -151,6 +177,10 @@ int ready_empty(DLL *r){
     return check;
 }
 
+/**
+* This checks if the IO queue contains any processes. Returns 1 if empty, 0 if not empty.
+* Parameters: d, the doubly linked list to free it's values 
+*/
 int io_empty(DLL *r){
     int check;
     pthread_mutex_lock(&io_lock);
@@ -160,6 +190,10 @@ int io_empty(DLL *r){
     return check;
 }
 
+/**
+* This runs on the parse thread and takes a file pointer and parses it into new processes to be sent to the ready queue.
+* Parameters: param, a thread_data struct containing everything needed 
+*/
 void *  parse_input(void *param){
     struct thread_data *myTD = (struct thread_data *) param;
     FILE *f = myTD->f;
@@ -168,6 +202,7 @@ void *  parse_input(void *param){
     char *Str1 = malloc(BUF_SIZE * sizeof(char)); 
     if(Str1 == NULL) exit(1);
 
+    // reads file one line at a time
     while(fgets(Str1, BUF_SIZE, f)){
         if( strncmp("sleep", Str1, 5) == 0){
             //Case of sleep, get the value for how long and sleep
@@ -220,12 +255,21 @@ void *  parse_input(void *param){
     return NULL;        
 }
 
-double getTime(node* n) {
+/**
+* This gets the current time using gettimeofday
+*/
+double getTime() {
 	struct timeval t;
 	gettimeofday(&t, 0);
 	return t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
 }
 
+/**
+* This runs on the IO thread and simulates the behavior of IO by sleeping for a given time determined by the popped
+* process from the IO queue. Once it has finished sleeping, the process is sent back on the ready queue for the CPU
+* thread.
+* Parameters: param, a thread_data struct containing everything needed 
+*/
 void * ioSchedule(void* param){
     //Same as cpu scheduler, but more stuff
     struct thread_data *myTD = (struct thread_data *) param;
@@ -256,14 +300,11 @@ void * ioSchedule(void* param){
             exit(1);
         }
 
-		temp->lastUsed = getTime(temp);
+		temp->lastUsed = getTime();
 
         //Have to wait until ready queue is open to add more to it
         //Put the process back on the ready queue
         pthread_mutex_lock(&ready_lock);
-        //insertNewNode(temp->proc,++index, temp->size, temp->prior, d);
-        //temp->index += 1;
-        //moveNode(temp, d);
         moveNewNode(temp->proc,++index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, d);
         pthread_mutex_unlock(&ready_lock);
 
@@ -318,6 +359,14 @@ node * schedulePR(DLL *d){
     }
     return n;
 }
+
+/**
+* This runs on the CPU thread and simulates the behavior of the CPU scheduler by getting a process from the ready
+* queue and sleeping a given amount of time determined by said process. How which process is chosen is determined
+* by which algorithm the user specified before execution (with the exeption of round-robin). Once it is done 
+* sleeping, the process is either sent back to the IO queue or the comp queue depending if its finished or not. 
+* Parameters: param, a thread_data struct containing everything needed 
+*/
 void* cpuSchedule(void* param) {
     struct thread_data *myTD = (struct thread_data *) param;
     DLL *d = myTD->r;
@@ -343,7 +392,7 @@ void* cpuSchedule(void* param) {
         if(algo == 2) temp = schedulePR(d);
         pthread_mutex_unlock(&ready_lock);
 
-        temp->waitTime += getTime(temp) - temp->lastUsed;
+        temp->waitTime += getTime() - temp->lastUsed;
 
         //Then the designated amount of cpu burst time
         int index = temp->index;  
@@ -363,14 +412,11 @@ void* cpuSchedule(void* param) {
 	if ( index < temp->size-1 ) {
             //If the I/O queue can be manipulated, then add to I/O queue
             pthread_mutex_lock(&io_lock);
-            //insertNewNode(temp->proc, ++index, temp->size, temp->prior, io);
-            //temp->index += 1;
-        	//moveNode(temp, io);
             moveNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, io);
             pthread_mutex_unlock(&io_lock);
 
 	}else{    
-			temp->lastUsed = getTime(temp);
+			temp->lastUsed = getTime();
             moveNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, comp);
             free(temp->proc);
         }
@@ -396,6 +442,9 @@ void* cpuSchedule(void* param) {
     return NULL;
 }
 
+/**
+* This returns the smaller integer between the two inupts
+*/
 int min(int a, int b) {
     if (a > b) {
         return b;
@@ -403,7 +452,11 @@ int min(int a, int b) {
     return a;
 }
 
-// scheduler for round robin
+/**
+* Due to the round-robin algorithm needing to change processes for every quantum, it warrented its own function.
+* For a general idea on what this does, see the "cpuSchedule" function
+* Parameters: param, a thread_data struct containing everything needed 
+*/
 void* cpuScheduleRR(void* param) {
     struct thread_data *myTD = (struct thread_data *) param;
     DLL *d = myTD->r;
@@ -414,25 +467,21 @@ void* cpuScheduleRR(void* param) {
     int procRunTime = 0;
     int index = 0;
     double tempWaitTime = 0;
-    
-    // Dequeue proc from head of ready queue
-    // Run job for at most one quantum
-    	// If it hasn't completed, preempt and add to tail of ready queue
-		// If it is finished or blocked, pick another proc immediantly
-	// Repeat
 
     while (stop != 1 || ready_empty(d) == 0 || io_empty(io) == 0) {
         //Guaranteed that cpu burst will be the last, so if any queue has something in it
         //there will be a cpu burst at the end
 	while (d->head == NULL) {};
 
+		// Dequeue proc from head of ready queue
 		pthread_mutex_lock(&ready_lock);
         temp = scheduleFCFS(d); // FCFS & RR get procs the same way (top of DLL)
         pthread_mutex_unlock(&ready_lock);
 
-        tempWaitTime = getTime(temp) - temp->lastUsed;
+        tempWaitTime = getTime() - temp->lastUsed;
         temp->waitTime += tempWaitTime;
 
+        // Run job for at most one quantum
         index = temp->index;
         procRunTime = min(temp->proc[index], quantum);
         temp->proc[index] -= procRunTime;
@@ -456,15 +505,19 @@ void* cpuScheduleRR(void* param) {
 		    moveNewNode(temp->proc, ++index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, io);
 		    pthread_mutex_unlock(&io_lock);
 		} else {
-		    // proc is done
-		    temp->lastUsed = getTime(temp);
+		    // If it is finished or blocked, pick another proc immediantly
+		    temp->lastUsed = getTime();
+
+		    if (d->head->lastUsed == temp->lastUsed) {
+	    		d->head->waitTime -= tempWaitTime;
+	    	}
 
 		    moveNewNode(temp->proc, 0, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, comp);
 		    free(temp->proc);
 		}
 	    } else {
-
-	    	temp->lastUsed = getTime(temp);
+	    	// If it hasn't completed, preempt and add to tail of ready queue
+	    	temp->lastUsed = getTime();
 
 	    	pthread_mutex_lock(&ready_lock);
 	    	moveNewNode(temp->proc, index, temp->size, temp->prior, temp->arrivalTime, temp->lastUsed, temp->waitTime, temp->execTime, d);
@@ -536,7 +589,6 @@ int main(int argc, char const *argv[]) {
     DLL* ready = newDLL();
     DLL* ioQueue = newDLL();
     DLL* completedProc = newDLL();
-    struct timeval t;
     double startTime = 0;
     
     if (curAlgo == 3) {
@@ -545,23 +597,24 @@ int main(int argc, char const *argv[]) {
     	fp = fopen(argv[4], "r");
     }
 
-    gettimeofday(&t, 0);
-    startTime = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
+    startTime = getTime();
 
     if(fp){
+    	// setting up thread data
         td.f = fp;
         td.r = ready;
         td.ioq = ioQueue;
         td.comp = completedProc;
         td.alg = curAlgo;
 
+        // creating the parsing thread
         error = pthread_create(&tID, NULL, parse_input, &td);
         if(error != 0){
             printf("Input Parser thread could not be created\n");
             exit(1);
         }
 
-        // for CPU thread
+        // creating the CPU thread
         if (curAlgo == 3) {
             error = pthread_create(&cpuTID, NULL, cpuScheduleRR, &td);
         } else {
@@ -572,7 +625,7 @@ int main(int argc, char const *argv[]) {
             exit(1);
         }
 
-        //For IO Thread
+        // creating the IO Thread
         error = pthread_create(&ioTID, NULL, ioSchedule, &td);
         if(error != 0){
             printf("IO thread could not be created\n");
@@ -584,6 +637,7 @@ int main(int argc, char const *argv[]) {
         exit(1);
     }
     
+    // joining thread data and begin stopping other threads
     pthread_join(tID, &thread_result);
     if (thread_result != 0) {
     	printf("Input parser thread returned an error\n");
@@ -609,9 +663,7 @@ int main(int argc, char const *argv[]) {
     }
 
     // calculating times
-
-    gettimeofday(&t, 0);
-    double endTime = t.tv_sec * 1000.0 + (t.tv_usec/1000.0);
+    double endTime = getTime();
     node* temp = completedProc->head;
     float procAmount = 0;
     double wtSum = 0;
